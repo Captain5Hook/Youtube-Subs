@@ -225,7 +225,7 @@ async def setup_counter(
         embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
         embed.add_field(name="Channel Name Format", value=f"`{new_name}`", inline=False)
-        embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 10m")
+        embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 5m")
 
         # Send response to Discord IMMEDIATELY to prevent "thinking..." hang!
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -292,7 +292,6 @@ async def counter_status(interaction: discord.Interaction):
     embed.add_field(name="Template", value=f"`{template}`", inline=False)
     embed.set_footer(text=CREATOR_CREDIT)
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="stop-counter", description="Remove and disable the YouTube sub counter for this server.")
@@ -303,12 +302,12 @@ async def stop_counter(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Counter disabled and removed from this server.", ephemeral=True)
 
 
-# --- 10-Minute Background Refresh Task ---
-@tasks.loop(minutes=10)
+# --- 5-Minute Background Refresh Task (Fastest Safe Discord Speed) ---
+@tasks.loop(minutes=5)
 async def counter_update_loop():
     """
-    Discord restricts channel renames to 2 per 10 minutes per channel.
-    Running every 10 minutes guarantees no rate-limit bans (HTTP 429).
+    Checks YouTube and updates channel every 5 minutes.
+    This is the maximum allowable speed by Discord (limit: 2 edits per 10 minutes).
     """
     cursor.execute("SELECT guild_id, channel_id, yt_channel_id, display_template FROM server_configs")
     configs = cursor.fetchall()
