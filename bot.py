@@ -155,43 +155,14 @@ async def setup_counter(
     youtube_channel: str,
     template: str = "🔴 Subs: {subs}"
 ):
-    await interaction.response.defer(ephemeral=True)
-
     try:
-        # Resolve real channel object from guild or bot fetch
-        actual_channel = interaction.guild.get_channel(channel.id)
-        if not actual_channel:
-            try:
-                actual_channel = await bot.fetch_channel(channel.id)
-            except Exception:
-                actual_channel = None
+        # Resolve real channel object from guild or bot
+        actual_channel = interaction.guild.get_channel(channel.id) or channel
 
-        if not actual_channel:
-            await interaction.followup.send("❌ Could not find that channel in this server.", ephemeral=True)
-            return
-
-        # Resolve bot member for permission check
-        bot_member = interaction.guild.me or interaction.guild.get_member(bot.user.id)
-        if not bot_member:
-            try:
-                bot_member = await interaction.guild.fetch_member(bot.user.id)
-            except Exception:
-                pass
-
-        if bot_member:
-            perms = actual_channel.permissions_for(bot_member)
-            if not perms.manage_channels:
-                await interaction.followup.send(
-                    f"❌ I do not have permission to manage {actual_channel.mention}. "
-                    "Please ensure my bot role has **Manage Channels** and is placed higher than this channel in server roles.",
-                    ephemeral=True
-                )
-                return
-
-        # Fetch YouTube details
+        # Fetch YouTube details fast
         yt_id, yt_title, subs = await fetch_youtube_data(youtube_channel)
         if yt_id is None or subs is None:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 f"❌ Could not find YouTube channel for `{youtube_channel}`.\n"
                 "Try using the exact channel ID (starts with `UC...`) or handle (e.g., `@YouTube`).",
                 ephemeral=True
@@ -218,32 +189,35 @@ async def setup_counter(
 
         embed = discord.Embed(
             title="✅ Counter Configured Successfully!",
-            description=f"Tracking **{yt_title}** in {actual_channel.mention}",
+            description=f"Now tracking **{yt_title}** in {actual_channel.mention}",
             color=discord.Color.green()
         )
         embed.add_field(name="YouTube Channel", value=f"**{yt_title}** (`{yt_id}`)", inline=False)
         embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
-        embed.add_field(name="Channel Name Format", value=f"`{new_name}`", inline=False)
+        embed.add_field(name="Display Format", value=f"`{new_name}`", inline=False)
         embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 1m")
 
-        # Send response to Discord IMMEDIATELY to prevent "thinking..." hang!
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        # Send response INSTANTLY with send_message (ZERO loading animation / NO "thinking...")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # Non-blocking rename attempt (Discord rate limit: 2 renames per 10 mins)
-        try:
-            await asyncio.wait_for(actual_channel.edit(name=new_name), timeout=3.0)
-            print(f"Renamed channel {actual_channel.id} to '{new_name}'")
-        except asyncio.TimeoutError:
-            print("Channel edit timed out (Discord rate limit 429). Will update in 10m loop.")
-        except discord.Forbidden:
-            print(f"Forbidden: bot missing permissions to rename {actual_channel.id}")
-        except Exception as edit_err:
-            print(f"Channel rename notice: {edit_err}")
+        # Run channel rename in background so Discord never lags
+        async def background_rename():
+            try:
+                chan = interaction.guild.get_channel(channel.id) or await bot.fetch_channel(channel.id)
+                await chan.edit(name=new_name)
+                print(f"[SETUP] Renamed channel to '{new_name}'")
+            except Exception as rename_err:
+                print(f"[SETUP] Note on rename: {rename_err}")
+
+        asyncio.create_task(background_rename())
 
     except Exception as e:
         print(f"Error in setup_counter: {e}")
-        await interaction.followup.send(f"⚠️ Error executing command: {e}", ephemeral=True)
+        if interaction.response.is_done():
+            await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
 
 
 @bot.tree.error
