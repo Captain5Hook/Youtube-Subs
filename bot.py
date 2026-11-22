@@ -313,31 +313,39 @@ async def counter_update_loop():
     cursor.execute("SELECT guild_id, channel_id, yt_channel_id, display_template FROM server_configs")
     configs = cursor.fetchall()
 
+    if not configs:
+        return
+
+    print(f"[LOOP] Running update check for {len(configs)} configured counter(s)...")
+
     for guild_id, channel_id, yt_id, template in configs:
         try:
-            guild = bot.get_guild(int(guild_id))
-            if not guild:
-                continue
-
-            channel = guild.get_channel(int(channel_id))
+            # Fetch channel reliably across cache and API
+            channel = bot.get_channel(int(channel_id))
             if not channel:
-                continue
+                try:
+                    channel = await bot.fetch_channel(int(channel_id))
+                except Exception as fetch_err:
+                    print(f"[LOOP] Could not fetch channel {channel_id}: {fetch_err}")
+                    continue
 
-            _, _, subs = await fetch_youtube_data(yt_id)
+            _, yt_title, subs = await fetch_youtube_data(yt_id)
             if subs is not None:
                 formatted = format_sub_count(subs)
                 target_name = template.replace("{subs}", formatted)
+                print(f"[LOOP] Channel: '{channel.name}' | YouTube: {subs} subs | Target: '{target_name}'")
+
                 if channel.name != target_name:
                     try:
                         # Non-blocking rename (so Discord 429 rate limits don't freeze the loop)
                         await asyncio.wait_for(channel.edit(name=target_name), timeout=3.0)
-                        print(f"Updated channel {channel.name} -> {target_name}")
+                        print(f"[LOOP] Successfully renamed channel to '{target_name}'")
                     except asyncio.TimeoutError:
-                        print(f"Discord rate-limited channel {channel_id} (will retry on next minute).")
+                        print(f"[LOOP] Discord rate-limited channel {channel_id} (max 2 per 10m). Will retry next minute.")
                     except Exception as edit_err:
-                        print(f"Error editing channel {channel_id}: {edit_err}")
+                        print(f"[LOOP] Error editing channel {channel_id}: {edit_err}")
         except Exception as e:
-            print(f"Error updating guild {guild_id}: {e}")
+            print(f"[LOOP] Error updating guild {guild_id}: {e}")
 
 
 @counter_update_loop.before_loop
