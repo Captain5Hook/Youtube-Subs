@@ -1,4 +1,5 @@
 import os
+import asyncio
 import sqlite3
 import aiohttp
 from aiohttp import web
@@ -94,7 +95,8 @@ async def fetch_youtube_data(yt_query: str) -> tuple[str | None, str | None, int
         handle = yt_query if yt_query.startswith("@") else f"@{yt_query}"
         params = {"part": "snippet,statistics", "forHandle": handle, "key": YOUTUBE_API_KEY}
 
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=6)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
             async with session.get(base_url, params=params) as resp:
                 if resp.status == 200:
@@ -210,30 +212,34 @@ async def setup_counter(
         )
         conn.commit()
 
-        # Immediate channel rename
+        # Format count & prepare embed
         formatted_count = format_sub_count(subs)
         new_name = template.replace("{subs}", formatted_count)
-        
-        try:
-            await actual_channel.edit(name=new_name)
-            rename_status = "Renamed successfully"
-        except discord.Forbidden:
-            rename_status = "Saved, but missing rename permission"
-        except discord.HTTPException as http_err:
-            rename_status = f"Saved! Channel rename was rate-limited by Discord (updates automatically in 10m)"
 
         embed = discord.Embed(
             title="✅ Counter Configured Successfully!",
+            description=f"Tracking **{yt_title}** in {actual_channel.mention}",
             color=discord.Color.green()
         )
         embed.add_field(name="YouTube Channel", value=f"**{yt_title}** (`{yt_id}`)", inline=False)
         embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
-        embed.add_field(name="Display Format", value=f"`{new_name}`", inline=False)
-        if "rate-limited" in rename_status or "missing" in rename_status:
-            embed.add_field(name="Note", value=rename_status, inline=False)
+        embed.add_field(name="Channel Name Format", value=f"`{new_name}`", inline=False)
         embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 10m")
+
+        # Send response to Discord IMMEDIATELY to prevent "thinking..." hang!
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # Non-blocking rename attempt (Discord rate limit: 2 renames per 10 mins)
+        try:
+            await asyncio.wait_for(actual_channel.edit(name=new_name), timeout=3.0)
+            print(f"Renamed channel {actual_channel.id} to '{new_name}'")
+        except asyncio.TimeoutError:
+            print("Channel edit timed out (Discord rate limit 429). Will update in 10m loop.")
+        except discord.Forbidden:
+            print(f"Forbidden: bot missing permissions to rename {actual_channel.id}")
+        except Exception as edit_err:
+            print(f"Channel rename notice: {edit_err}")
 
     except Exception as e:
         print(f"Error in setup_counter: {e}")
