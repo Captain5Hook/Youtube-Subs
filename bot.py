@@ -225,7 +225,7 @@ async def setup_counter(
         embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
         embed.add_field(name="Channel Name Format", value=f"`{new_name}`", inline=False)
-        embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 5m")
+        embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 1m")
 
         # Send response to Discord IMMEDIATELY to prevent "thinking..." hang!
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -302,12 +302,13 @@ async def stop_counter(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Counter disabled and removed from this server.", ephemeral=True)
 
 
-# --- 5-Minute Background Refresh Task (Fastest Safe Discord Speed) ---
-@tasks.loop(minutes=5)
+# --- 1-Minute Background Refresh Task ---
+@tasks.loop(minutes=1)
 async def counter_update_loop():
     """
-    Checks YouTube and updates channel every 5 minutes.
-    This is the maximum allowable speed by Discord (limit: 2 edits per 10 minutes).
+    Checks YouTube every 1 minute.
+    Only renames the channel if the subscriber count actually changed.
+    Uses non-blocking timeout to prevent Discord 429 rate-limit freezes.
     """
     cursor.execute("SELECT guild_id, channel_id, yt_channel_id, display_template FROM server_configs")
     configs = cursor.fetchall()
@@ -327,7 +328,14 @@ async def counter_update_loop():
                 formatted = format_sub_count(subs)
                 target_name = template.replace("{subs}", formatted)
                 if channel.name != target_name:
-                    await channel.edit(name=target_name)
+                    try:
+                        # Non-blocking rename (so Discord 429 rate limits don't freeze the loop)
+                        await asyncio.wait_for(channel.edit(name=target_name), timeout=3.0)
+                        print(f"Updated channel {channel.name} -> {target_name}")
+                    except asyncio.TimeoutError:
+                        print(f"Discord rate-limited channel {channel_id} (will retry on next minute).")
+                    except Exception as edit_err:
+                        print(f"Error editing channel {channel_id}: {edit_err}")
         except Exception as e:
             print(f"Error updating guild {guild_id}: {e}")
 
