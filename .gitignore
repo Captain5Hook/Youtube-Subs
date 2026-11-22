@@ -1,0 +1,14 @@
+# Environment variables & secrets (NEVER commit these!)
+.env
+
+# Database file
+*.db
+counters.db
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
