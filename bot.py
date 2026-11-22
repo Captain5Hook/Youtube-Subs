@@ -24,10 +24,12 @@ intents = discord.Intents.default()
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+VERSION = "v1.4-instant"
+
 # --- Render Web Server (For Ping Bot / UptimeRobot) ---
 async def handle_ping(request):
     """Health check endpoint for ping monitors like UptimeRobot"""
-    return web.Response(text="🟢 Bot is alive and running!", content_type="text/plain")
+    return web.Response(text=f"🟢 Bot is alive and running! ({VERSION})", content_type="text/plain")
 
 async def start_web_server():
     app = web.Application()
@@ -159,32 +161,34 @@ async def on_ready():
 
 # --- Slash Commands ---
 
+@bot.tree.command(name="ping", description="Test if the bot is responsive.")
+async def ping_command(interaction: discord.Interaction):
+    await interaction.response.send_message(f"🏓 Pong! Latency: {round(bot.latency * 1000)}ms", ephemeral=True)
+
+
 @bot.tree.command(
     name="setup-counter",
     description="Set or edit the YouTube subscriber counter channel for this server."
 )
 @app_commands.checks.has_permissions(manage_channels=True)
 @app_commands.describe(
-    channel="The Voice or Text channel to rename with the live count",
-    youtube_channel="Channel ID (UC...) or Handle (@MrBeast)",
+    channel="The Voice Channel to rename with the live count",
+    youtube_channel="Channel ID, Handle (@name), or Profile Link",
     template="Name format (default: '🔴 Subs: {subs}')"
 )
 async def setup_counter(
     interaction: discord.Interaction,
-    channel: discord.abc.GuildChannel,
+    channel: discord.VoiceChannel,
     youtube_channel: str,
     template: str = "🔴 Subs: {subs}"
 ):
     try:
-        # Resolve real channel object from guild or bot
-        actual_channel = interaction.guild.get_channel(channel.id) or channel
-
         # Fetch YouTube details fast
         yt_id, yt_title, subs = await fetch_youtube_data(youtube_channel)
         if yt_id is None or subs is None:
             await interaction.response.send_message(
                 f"❌ Could not find YouTube channel for `{youtube_channel}`.\n"
-                "Try using the exact channel ID (starts with `UC...`) or handle (e.g., `@YouTube`).",
+                "Please check the link or handle.",
                 ephemeral=True
             )
             return
@@ -206,14 +210,15 @@ async def setup_counter(
         # Format count & prepare embed
         formatted_count = format_sub_count(subs)
         new_name = template.replace("{subs}", formatted_count)
+        chan_mention = f"<#{channel.id}>"
 
         embed = discord.Embed(
             title="✅ Counter Configured Successfully!",
-            description=f"Now tracking **{yt_title}** in {actual_channel.mention}",
+            description=f"Now tracking **{yt_title}** in {chan_mention}",
             color=discord.Color.green()
         )
         embed.add_field(name="YouTube Channel", value=f"**{yt_title}** (`{yt_id}`)", inline=False)
-        embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
+        embed.add_field(name="Counter Channel", value=chan_mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
         embed.add_field(name="Display Format", value=f"`{new_name}`", inline=False)
         embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 1m")
@@ -224,9 +229,8 @@ async def setup_counter(
         # Run channel rename in background so Discord never lags
         async def background_rename():
             try:
-                chan = interaction.guild.get_channel(channel.id) or await bot.fetch_channel(channel.id)
-                await chan.edit(name=new_name)
-                print(f"[SETUP] Renamed channel to '{new_name}'")
+                await channel.edit(name=new_name)
+                print(f"[SETUP] Renamed channel {channel.id} to '{new_name}'")
             except Exception as rename_err:
                 print(f"[SETUP] Note on rename: {rename_err}")
 
@@ -234,10 +238,13 @@ async def setup_counter(
 
     except Exception as e:
         print(f"Error in setup_counter: {e}")
-        if interaction.response.is_done():
-            await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
+        except Exception:
+            pass
 
 
 @bot.tree.error
