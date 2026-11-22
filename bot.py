@@ -6,9 +6,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+from credits_manager import verify_and_get_credit
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Verify encrypted author attribution lock
+CREATOR_CREDIT = verify_and_get_credit()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
@@ -109,6 +113,7 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"✨ Verified Author: {CREATOR_CREDIT}")
     try:
         synced = await bot.tree.sync()
         print(f"Successfully synced {len(synced)} slash command(s).")
@@ -186,13 +191,24 @@ async def setup_counter(
         embed.add_field(name="Counter Channel", value=channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
         embed.add_field(name="Display Format", value=f"`{new_name}`", inline=False)
-        embed.set_footer(text="Auto-updates every 10 minutes to respect Discord rate limits.")
+        embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 10m")
         await interaction.followup.send(embed=embed, ephemeral=True)
     except discord.Forbidden:
         await interaction.followup.send(
             f"⚠️ Saved to database, but failed to rename {channel.mention}. Check bot channel permissions.",
             ephemeral=True
         )
+
+
+@bot.tree.command(name="credits", description="View creator and bot attribution details.")
+async def credits_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🤖 Bot Information",
+        description=f"**{CREATOR_CREDIT}**\n\nAutomated YouTube Live Subscriber Counter Bot for Discord.",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="Protected by Creator Lock (Passcode Protected)")
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 @bot.tree.command(name="counter-status", description="Check the current counter configuration for this server.")
@@ -218,6 +234,8 @@ async def counter_status(interaction: discord.Interaction):
     embed.add_field(name="Target Channel", value=channel_text, inline=True)
     embed.add_field(name="YouTube Channel", value=f"**{yt_title}** (`{yt_id}`)", inline=True)
     embed.add_field(name="Template", value=f"`{template}`", inline=False)
+    embed.set_footer(text=CREATOR_CREDIT)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
