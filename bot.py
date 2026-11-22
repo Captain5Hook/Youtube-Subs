@@ -22,6 +22,7 @@ PORT = int(os.getenv("PORT", 8080))  # Render sets PORT automatically (default: 
 
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 VERSION = "v1.4-instant"
