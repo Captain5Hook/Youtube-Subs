@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import sqlite3
 import aiohttp
@@ -67,53 +68,72 @@ def format_sub_count(count: int) -> str:
     return str(count)
 
 
-async def fetch_youtube_data(yt_query: str) -> tuple[str | None, str | None, int | None]:
+def parse_youtube_input(yt_query: str) -> list[dict]:
     """
-    Resolves YouTube Channel ID, Title, and Subscriber Count.
+    Parses any YouTube profile URL, channel link, handle, or channel ID.
     Accepts:
-      - Channel ID: 'UC_x5XG1OV2P6uZZ5FSM9Ttw'
-      - Handle: '@MrBeast' or 'MrBeast'
-      - Full URL: 'https://www.youtube.com/@Cr7busta_7' or 'https://youtube.com/channel/UC...'
-    Returns: (channel_id, title, subscriber_count) or (None, None, None) on failure.
+      - Full profile URLs: https://www.youtube.com/@Cr7busta_7
+      - Profile URLs with subpaths/query: https://www.youtube.com/@Cr7busta_7/videos?si=123
+      - Direct Channel URLs: https://www.youtube.com/channel/UCvXwFBdljcafO-bkOELVU9g
+      - Custom URLs: https://www.youtube.com/c/CustomName
+      - Legacy URLs: https://www.youtube.com/user/UserName
+      - Handles: @Cr7busta_7 or Cr7busta_7
+      - Direct Channel IDs: UCvXwFBdljcafO-bkOELVU9g
     """
-    yt_query = yt_query.strip()
+    query = yt_query.strip()
+
+    # 1. Direct Channel ID (starts with UC and has 24 chars)
+    channel_id_match = re.search(r"(UC[a-zA-Z0-9_\-]{22})", query)
+    if channel_id_match:
+        return [{"id": channel_id_match.group(1)}]
+
+    # 2. @Handle anywhere in the URL or text
+    handle_match = re.search(r"@([a-zA-Z0-9_\-\.]+)", query)
+    if handle_match:
+        handle = "@" + handle_match.group(1)
+        return [{"forHandle": handle}]
+
+    # 3. /user/ or /c/ in URL
+    user_match = re.search(r"/(?:user|c)/([a-zA-Z0-9_\-]+)", query)
+    if user_match:
+        name = user_match.group(1)
+        return [{"forHandle": f"@{name}"}, {"forUsername": name}]
+
+    # 4. Clean URL fallback
+    if "youtube.com" in query or "youtu.be" in query:
+        clean_name = query.split("?")[0].rstrip("/").split("/")[-1]
+        if clean_name:
+            return [{"forHandle": f"@{clean_name.lstrip('@')}"}, {"forUsername": clean_name}]
+
+    # 5. Raw string fallback
+    clean_str = query.lstrip("@").strip()
+    return [{"forHandle": f"@{clean_str}"}, {"forUsername": clean_str}]
+
+
+async def fetch_youtube_data(yt_query: str) -> tuple[str | None, str | None, int | None]:
+    """Resolves YouTube Channel ID, Title, and Subscriber Count from any link or handle."""
     base_url = "https://www.googleapis.com/youtube/v3/channels"
+    attempts = parse_youtube_input(yt_query)
 
-    # Clean URL if user pasted a full YouTube link
-    if "youtube.com/" in yt_query or "youtu.be/" in yt_query:
-        if "/channel/" in yt_query:
-            yt_query = yt_query.split("/channel/")[-1].split("/")[0].split("?")[0]
-        elif "/@" in yt_query:
-            yt_query = "@" + yt_query.split("/@")[-1].split("/")[0].split("?")[0]
-        else:
-            yt_query = yt_query.rstrip("/").split("/")[-1].split("?")[0]
-
-    # Determine whether user gave handle (@name) or direct channel ID (UC...)
-    if yt_query.startswith("UC") and len(yt_query) == 24:
-        params = {"part": "snippet,statistics", "id": yt_query, "key": YOUTUBE_API_KEY}
-    else:
-        handle = yt_query if yt_query.startswith("@") else f"@{yt_query}"
-        params = {"part": "snippet,statistics", "forHandle": handle, "key": YOUTUBE_API_KEY}
-
-    timeout = aiohttp.ClientTimeout(total=6)
+    timeout = aiohttp.ClientTimeout(total=5)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        try:
-            async with session.get(base_url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    items = data.get("items", [])
-                    if items:
-                        item = items[0]
-                        channel_id = item.get("id")
-                        title = item.get("snippet", {}).get("title", "Unknown")
-                        stats = item.get("statistics", {})
-                        subs = int(stats.get("subscriberCount", 0))
-                        return channel_id, title, subs
-                else:
-                    err_json = await resp.json()
-                    print(f"YouTube API Error [{resp.status}]: {err_json}")
-        except Exception as e:
-            print(f"Network error querying YouTube API: {e}")
+        for params in attempts:
+            params["part"] = "snippet,statistics"
+            params["key"] = YOUTUBE_API_KEY
+            try:
+                async with session.get(base_url, params=params) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        items = data.get("items", [])
+                        if items:
+                            item = items[0]
+                            channel_id = item.get("id")
+                            title = item.get("snippet", {}).get("title", "Unknown")
+                            stats = item.get("statistics", {})
+                            subs = int(stats.get("subscriberCount", 0))
+                            return channel_id, title, subs
+            except Exception as e:
+                print(f"Error querying YouTube with {params}: {e}")
 
     return None, None, None
 
