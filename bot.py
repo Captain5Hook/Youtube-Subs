@@ -19,6 +19,7 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 PORT = int(os.getenv("PORT", 8080))  # Render sets PORT automatically (default: 10000)
 
 intents = discord.Intents.default()
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Render Web Server (For Ping Bot / UptimeRobot) ---
@@ -154,67 +155,99 @@ async def setup_counter(
 ):
     await interaction.response.defer(ephemeral=True)
 
-    # Permission check: can the bot manage this channel?
-    bot_member = interaction.guild.me
-    if not channel.permissions_for(bot_member).manage_channels:
-        await interaction.followup.send(
-            f"❌ I do not have permission to manage {channel.mention}. "
-            "Please ensure my bot role has **Manage Channels** and is placed higher than this channel in role hierarchy.",
-            ephemeral=True
-        )
-        return
-
-    # Fetch YouTube details
-    yt_id, yt_title, subs = await fetch_youtube_data(youtube_channel)
-    if yt_id is None or subs is None:
-        await interaction.followup.send(
-            f"❌ Could not find YouTube channel for `{youtube_channel}`.\n"
-            "Try using the exact channel ID (starts with `UC...`) or handle (e.g., `@YouTube`).",
-            ephemeral=True
-        )
-        return
-
-    # Validate template
-    if "{subs}" not in template:
-        template += " {subs}"
-
-    # Save to SQLite
-    cursor.execute(
-        """
-        INSERT OR REPLACE INTO server_configs (guild_id, channel_id, yt_channel_id, yt_title, display_template)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (str(interaction.guild_id), str(channel.id), yt_id, yt_title, template)
-    )
-    conn.commit()
-
-    # Immediate channel rename
-    formatted_count = format_sub_count(subs)
-    new_name = template.replace("{subs}", formatted_count)
     try:
-        await channel.edit(name=new_name)
+        # Resolve real channel object from guild or bot fetch
+        actual_channel = interaction.guild.get_channel(channel.id)
+        if not actual_channel:
+            try:
+                actual_channel = await bot.fetch_channel(channel.id)
+            except Exception:
+                actual_channel = None
+
+        if not actual_channel:
+            await interaction.followup.send("❌ Could not find that channel in this server.", ephemeral=True)
+            return
+
+        # Resolve bot member for permission check
+        bot_member = interaction.guild.me or interaction.guild.get_member(bot.user.id)
+        if not bot_member:
+            try:
+                bot_member = await interaction.guild.fetch_member(bot.user.id)
+            except Exception:
+                pass
+
+        if bot_member:
+            perms = actual_channel.permissions_for(bot_member)
+            if not perms.manage_channels:
+                await interaction.followup.send(
+                    f"❌ I do not have permission to manage {actual_channel.mention}. "
+                    "Please ensure my bot role has **Manage Channels** and is placed higher than this channel in server roles.",
+                    ephemeral=True
+                )
+                return
+
+        # Fetch YouTube details
+        yt_id, yt_title, subs = await fetch_youtube_data(youtube_channel)
+        if yt_id is None or subs is None:
+            await interaction.followup.send(
+                f"❌ Could not find YouTube channel for `{youtube_channel}`.\n"
+                "Try using the exact channel ID (starts with `UC...`) or handle (e.g., `@YouTube`).",
+                ephemeral=True
+            )
+            return
+
+        # Validate template
+        if "{subs}" not in template:
+            template += " {subs}"
+
+        # Save to SQLite
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO server_configs (guild_id, channel_id, yt_channel_id, yt_title, display_template)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (str(interaction.guild_id), str(channel.id), yt_id, yt_title, template)
+        )
+        conn.commit()
+
+        # Immediate channel rename
+        formatted_count = format_sub_count(subs)
+        new_name = template.replace("{subs}", formatted_count)
+        
+        try:
+            await actual_channel.edit(name=new_name)
+            rename_status = "Renamed successfully"
+        except discord.Forbidden:
+            rename_status = "Saved, but missing rename permission"
+        except discord.HTTPException as http_err:
+            rename_status = f"Saved! Channel rename was rate-limited by Discord (updates automatically in 10m)"
+
         embed = discord.Embed(
             title="✅ Counter Configured Successfully!",
             color=discord.Color.green()
         )
         embed.add_field(name="YouTube Channel", value=f"**{yt_title}** (`{yt_id}`)", inline=False)
-        embed.add_field(name="Counter Channel", value=channel.mention, inline=True)
+        embed.add_field(name="Counter Channel", value=actual_channel.mention, inline=True)
         embed.add_field(name="Current Subscribers", value=formatted_count, inline=True)
         embed.add_field(name="Display Format", value=f"`{new_name}`", inline=False)
+        if "rate-limited" in rename_status or "missing" in rename_status:
+            embed.add_field(name="Note", value=rename_status, inline=False)
         embed.set_footer(text=f"{CREATOR_CREDIT} • Updates every 10m")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    except discord.Forbidden:
-        await interaction.followup.send(
-            f"⚠️ Saved to database, but failed to rename {channel.mention}. Check that the bot's role is above this channel and has **Manage Channels** permission.",
-            ephemeral=True
-        )
-    except discord.HTTPException as http_err:
-        await interaction.followup.send(
-            f"⚠️ Saved to database! Discord temporarily rate-limited channel renaming (Discord limits 2 renames per 10 minutes). It will automatically update in a few minutes.",
-            ephemeral=True
-        )
+
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Unexpected error: {e}", ephemeral=True)
+        print(f"Error in setup_counter: {e}")
+        await interaction.followup.send(f"⚠️ Error executing command: {e}", ephemeral=True)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    print(f"Global App Command Error: {error}")
+    msg = f"❌ Error: {error}"
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 @bot.tree.command(name="credits", description="View creator and bot attribution details.")
