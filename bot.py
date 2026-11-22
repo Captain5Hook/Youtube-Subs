@@ -205,9 +205,16 @@ async def setup_counter(
         await interaction.followup.send(embed=embed, ephemeral=True)
     except discord.Forbidden:
         await interaction.followup.send(
-            f"⚠️ Saved to database, but failed to rename {channel.mention}. Check bot channel permissions.",
+            f"⚠️ Saved to database, but failed to rename {channel.mention}. Check that the bot's role is above this channel and has **Manage Channels** permission.",
             ephemeral=True
         )
+    except discord.HTTPException as http_err:
+        await interaction.followup.send(
+            f"⚠️ Saved to database! Discord temporarily rate-limited channel renaming (Discord limits 2 renames per 10 minutes). It will automatically update in a few minutes.",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Unexpected error: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="credits", description="View creator and bot attribution details.")
