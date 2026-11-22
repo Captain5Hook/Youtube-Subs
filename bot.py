@@ -71,10 +71,20 @@ async def fetch_youtube_data(yt_query: str) -> tuple[str | None, str | None, int
     Accepts:
       - Channel ID: 'UC_x5XG1OV2P6uZZ5FSM9Ttw'
       - Handle: '@MrBeast' or 'MrBeast'
+      - Full URL: 'https://www.youtube.com/@Cr7busta_7' or 'https://youtube.com/channel/UC...'
     Returns: (channel_id, title, subscriber_count) or (None, None, None) on failure.
     """
     yt_query = yt_query.strip()
     base_url = "https://www.googleapis.com/youtube/v3/channels"
+
+    # Clean URL if user pasted a full YouTube link
+    if "youtube.com/" in yt_query or "youtu.be/" in yt_query:
+        if "/channel/" in yt_query:
+            yt_query = yt_query.split("/channel/")[-1].split("/")[0].split("?")[0]
+        elif "/@" in yt_query:
+            yt_query = "@" + yt_query.split("/@")[-1].split("/")[0].split("?")[0]
+        else:
+            yt_query = yt_query.rstrip("/").split("/")[-1].split("?")[0]
 
     # Determine whether user gave handle (@name) or direct channel ID (UC...)
     if yt_query.startswith("UC") and len(yt_query) == 24:
